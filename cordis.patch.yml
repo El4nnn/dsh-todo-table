@@ -1,0 +1,4 @@
+# dsh-todo-table bundle patch: one host row serving the todo data route.
+- insert:
+    - id: todo-table
+      name: dsh-todo-table

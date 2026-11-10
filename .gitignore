@@ -1,0 +1,13 @@
+# 本插件的真实数据文件（含个人待办内容），不入库
+data/todos.json
+
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 编辑器与系统垃圾
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

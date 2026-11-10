@@ -1,0 +1,49 @@
+{
+  "name": "dsh-todo-table",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Right-sidebar todo table: a two-column list of todo items and their handling status, filled from the conversation.",
+  "license": "MIT",
+  "author": "El4nnn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/El4nnn/dsh-todo-table.git"
+  },
+  "homepage": "https://github.com/El4nnn/dsh-todo-table#readme",
+  "bugs": {
+    "url": "https://github.com/El4nnn/dsh-todo-table/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "todo",
+    "todo-list",
+    "sidebar"
+  ],
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.mjs",
+    "client.js",
+    "cordis.patch.yml",
+    "data/todos.example.json",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-sidebar-right"]
+    }
+  }
+}
