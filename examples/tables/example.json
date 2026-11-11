@@ -1,0 +1,22 @@
+{
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "items": [
+    {
+      "id": "t1",
+      "text": "把 examples/ 复制成 data/ 看一眼效果",
+      "status": "pending",
+      "note": "cp -r examples/. data/"
+    },
+    {
+      "id": "t2",
+      "text": "在右侧栏新建自己的第一张表",
+      "status": "doing"
+    },
+    {
+      "id": "t3",
+      "text": "在对话里让 agent 往表里加一行",
+      "status": "done",
+      "note": "agent 直接改 data/tables/<id>.json，打开着的表 5 秒内自己刷新"
+    }
+  ]
+}

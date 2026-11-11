@@ -1,8 +1,8 @@
 {
   "name": "dsh-todo-table",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Right-sidebar todo table: a two-column list of todo items and their handling status, filled from the conversation.",
+  "description": "Right-sidebar todo tables for DSH: independent tables, one tab each, filled from the conversation.",
   "license": "MIT",
   "author": "El4nnn",
   "repository": {
@@ -32,7 +32,7 @@
     "index.mjs",
     "client.js",
     "cordis.patch.yml",
-    "data/todos.example.json",
+    "examples/",
     "locale/*.json",
     "icon.svg",
     "README.md",

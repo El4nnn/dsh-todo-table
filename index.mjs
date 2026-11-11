@@ -1,34 +1,38 @@
 /**
  * Host half of the todo table.
  *
- * The table itself is browser UI (see `client.js`), so the only thing that has to
- * live in the Host process is the data: one exact HTTP route over the plugin's own
- * `data/todos.json`. The Agent (or the user) edits that file during a conversation
- * and the open tab picks the change up; flipping a status in the tab posts back here.
+ * Tables are independent entities: `data/index.json` holds the list (id, name,
+ * optional session binding), and each table's rows live in `data/tables/<id>.json`.
+ * The browser half opens one tab per table, so several tables can be open at once.
+ *
+ * Routes (registered as one prefix route):
+ *   GET  /api/dsh-todo-table             list of tables with counts (also a probe)
+ *   GET  /api/dsh-todo-table/tables      same list
+ *   POST /api/dsh-todo-table/tables      { name, sessionId? } -> create
+ *   POST /api/dsh-todo-table/rename      { id, name } -> rename
+ *   GET  /api/dsh-todo-table/rows?id=    one table's rows
+ *   POST /api/dsh-todo-table/status      { tableId, itemId, status } -> flip a row
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const packageDir = path.dirname(fileURLToPath(import.meta.url))
-const dataFile = path.join(packageDir, 'data', 'todos.json')
+const dataDir = path.join(packageDir, 'data')
+const indexFile = path.join(dataDir, 'index.json')
+const tablesDir = path.join(dataDir, 'tables')
 const routePath = '/api/dsh-todo-table'
+const buildMarker = 'multi-table-v2'
 const statuses = ['pending', 'doing', 'done']
 const maxBodyBytes = 64 * 1024
+const maxNameLength = 80
 
 /** Required Host service: the HTTP carrier the browser tab reads through. */
 export const inject = ['webServer']
 
-/** The document an absent or unreadable data file degrades to. */
-function emptyDocument() {
-  return { title: '', updatedAt: null, items: [] }
-}
+const stamp = () => new Date().toISOString()
 
-/**
- * Keep only well-formed rows, so a hand-edited JSON file cannot break the table.
- * @param value - the file's `items` field.
- * @returns the rows the browser renders.
- */
+/** Keep only well-formed rows, so a hand-edited JSON file cannot break the table. */
 function normalizeItems(value) {
   if (!Array.isArray(value)) return []
   const items = []
@@ -45,30 +49,85 @@ function normalizeItems(value) {
   return items
 }
 
-/** Read the table document, degrading to an empty table instead of failing the route. */
-async function readDocument() {
+/** A display name never ends up empty or oversized. */
+function normalizeName(value, fallback) {
+  const text = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
+  return (text === '' ? fallback : text).slice(0, maxNameLength)
+}
+
+/** One table entry from the index file, or `undefined` when it is malformed. */
+function normalizeTable(raw) {
+  if (raw === null || typeof raw !== 'object') return undefined
+  if (typeof raw.id !== 'string' || raw.id === '') return undefined
+  return {
+    id: raw.id,
+    name: normalizeName(raw.name, '未命名表'),
+    sessionId: typeof raw.sessionId === 'string' && raw.sessionId !== '' ? raw.sessionId : null,
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : stamp(),
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : stamp(),
+  }
+}
+
+async function readIndex() {
   let parsed
   try {
-    parsed = JSON.parse(await readFile(dataFile, 'utf8'))
+    parsed = JSON.parse(await readFile(indexFile, 'utf8'))
   } catch {
-    return emptyDocument()
+    return { version: 2, tables: [] }
   }
-  const document = emptyDocument()
-  if (parsed !== null && typeof parsed === 'object') {
-    if (typeof parsed.title === 'string') document.title = parsed.title
-    if (typeof parsed.updatedAt === 'string') document.updatedAt = parsed.updatedAt
-    document.items = normalizeItems(parsed.items)
-  }
-  return document
+  const tables = Array.isArray(parsed?.tables) ? parsed.tables.map(normalizeTable).filter(Boolean) : []
+  return { version: 2, tables }
 }
 
-/** Write the table document back, creating `data/` when the checkout lost it. */
-async function writeDocument(document) {
-  await mkdir(path.dirname(dataFile), { recursive: true })
-  await writeFile(dataFile, `${JSON.stringify(document, null, 2)}\n`, 'utf8')
+async function writeIndex(index) {
+  await mkdir(dataDir, { recursive: true })
+  await writeFile(indexFile, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
 }
 
-/** Answer one JSON response. */
+/** One table's rows file. Ids are generated here, so they are safe path segments. */
+const rowsFile = (id) => path.join(tablesDir, `${id}.json`)
+
+async function readRows(id) {
+  try {
+    const parsed = JSON.parse(await readFile(rowsFile(id), 'utf8'))
+    return normalizeItems(parsed?.items)
+  } catch {
+    return []
+  }
+}
+
+async function writeRows(id, items) {
+  await mkdir(tablesDir, { recursive: true })
+  await writeFile(rowsFile(id), `${JSON.stringify({ updatedAt: stamp(), items }, null, 2)}\n`, 'utf8')
+}
+
+/** A short, URL-safe, address-safe id. */
+function newTableId() {
+  return `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+}
+
+/** The list the browser renders: every table plus its counts. */
+async function listTables() {
+  const index = await readIndex()
+  const tables = []
+  for (const table of index.tables) {
+    const items = await readRows(table.id)
+    tables.push({
+      ...table,
+      count: items.length,
+      done: items.filter((item) => item.status === 'done').length,
+    })
+  }
+  return tables
+}
+
+async function oneTable(id) {
+  const index = await readIndex()
+  const table = index.tables.find((candidate) => candidate.id === id)
+  if (table === undefined) return undefined
+  return { ...table, items: await readRows(id) }
+}
+
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -79,7 +138,6 @@ function sendJson(res, status, body) {
   res.end(payload)
 }
 
-/** Read a small JSON request body. */
 async function readJsonBody(req) {
   const chunks = []
   let size = 0
@@ -93,52 +151,127 @@ async function readJsonBody(req) {
   return JSON.parse(text)
 }
 
-/** GET reads the table; POST flips one row's status. */
-async function handleRequest(req, res) {
-  const method = (req.method ?? 'GET').toUpperCase()
-  if (method === 'GET' || method === 'HEAD') {
-    sendJson(res, 200, await readDocument())
-    return
-  }
-  if (method !== 'POST') {
-    res.writeHead(405, { allow: 'GET, HEAD, POST', 'cache-control': 'no-store' })
-    res.end()
-    return
-  }
-  let body
-  try {
-    body = await readJsonBody(req)
-  } catch {
-    sendJson(res, 400, { ok: false, error: 'body must be JSON' })
-    return
-  }
+/** Create a table (optionally bound to one Session) and start it empty. */
+async function createTable(body, res) {
+  const index = await readIndex()
+  const name = normalizeName(body?.name, `表 ${index.tables.length + 1}`)
+  const sessionId = typeof body?.sessionId === 'string' && body.sessionId !== '' ? body.sessionId : null
+  const table = { id: newTableId(), name, sessionId, createdAt: stamp(), updatedAt: stamp() }
+  index.tables.push(table)
+  await writeIndex(index)
+  await writeRows(table.id, [])
+  sendJson(res, 200, { ok: true, table: { ...table, count: 0, done: 0 } })
+}
+
+async function renameTable(body, res) {
   const id = typeof body?.id === 'string' ? body.id : ''
-  const status = statuses.includes(body?.status) ? body.status : ''
-  if (id === '' || status === '') {
-    sendJson(res, 400, { ok: false, error: 'expected { id, status }' })
+  const name = normalizeName(body?.name, '')
+  if (id === '' || name === '') {
+    sendJson(res, 400, { ok: false, error: 'expected { id, name }' })
     return
   }
-  const document = await readDocument()
-  const item = document.items.find((candidate) => candidate.id === id)
+  const index = await readIndex()
+  const table = index.tables.find((candidate) => candidate.id === id)
+  if (table === undefined) {
+    sendJson(res, 404, { ok: false, error: `unknown table "${id}"` })
+    return
+  }
+  table.name = name
+  await writeIndex(index)
+  sendJson(res, 200, { ok: true, table })
+}
+
+/** Move one row to another status. */
+async function setStatus(body, res) {
+  const tableId = typeof body?.tableId === 'string' ? body.tableId : ''
+  const itemId = typeof body?.itemId === 'string' ? body.itemId : ''
+  const status = statuses.includes(body?.status) ? body.status : ''
+  if (tableId === '' || itemId === '' || status === '') {
+    sendJson(res, 400, { ok: false, error: 'expected { tableId, itemId, status }' })
+    return
+  }
+  const table = await oneTable(tableId)
+  if (table === undefined) {
+    sendJson(res, 404, { ok: false, error: `unknown table "${tableId}"` })
+    return
+  }
+  const item = table.items.find((candidate) => candidate.id === itemId)
   if (item === undefined) {
-    sendJson(res, 404, { ok: false, error: `unknown todo item "${id}"` })
+    sendJson(res, 404, { ok: false, error: `unknown todo item "${itemId}"` })
     return
   }
   item.status = status
-  document.updatedAt = new Date().toISOString()
-  await writeDocument(document)
-  sendJson(res, 200, { ok: true, document })
+  await writeRows(tableId, table.items)
+  const index = await readIndex()
+  const entry = index.tables.find((candidate) => candidate.id === tableId)
+  if (entry !== undefined) {
+    entry.updatedAt = stamp()
+    await writeIndex(index)
+  }
+  sendJson(res, 200, { ok: true, table: { ...table, items: table.items } })
+}
+
+async function handleRequest(req, res) {
+  const url = new URL(req.url ?? routePath, 'http://localhost')
+  const route = url.pathname.slice(routePath.length).replace(/\/+$/, '') || '/'
+  const method = (req.method ?? 'GET').toUpperCase()
+  const readOnly = method === 'GET' || method === 'HEAD'
+
+  if (route === '/' || route === '/tables') {
+    if (!readOnly) {
+      if (method !== 'POST') {
+        sendJson(res, 405, { ok: false, error: 'method not allowed' })
+        return
+      }
+      await createTable(await readJsonBody(req), res)
+      return
+    }
+    const tables = await listTables()
+    sendJson(res, 200, { build: buildMarker, ok: true, tables })
+    return
+  }
+
+  if (route === '/rename') {
+    if (method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'method not allowed' })
+      return
+    }
+    await renameTable(await readJsonBody(req), res)
+    return
+  }
+
+  if (route === '/rows') {
+    const id = url.searchParams.get('id') ?? ''
+    const table = await oneTable(id)
+    if (table === undefined) {
+      sendJson(res, 404, { ok: false, error: `unknown table "${id}"` })
+      return
+    }
+    sendJson(res, 200, { ok: true, table })
+    return
+  }
+
+  if (route === '/status') {
+    if (method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'method not allowed' })
+      return
+    }
+    await setStatus(await readJsonBody(req), res)
+    return
+  }
+
+  sendJson(res, 404, { ok: false, error: `unknown route "${route}"` })
 }
 
 /**
- * Host plugin body: register the data route for this plugin's lifetime.
+ * Host plugin body: register the data routes for this plugin's lifetime.
  * @param ctx - Host context carrying the HTTP carrier.
  */
 export function apply(ctx) {
   ctx.effect(
     () =>
       ctx.webServer.register({
-        kind: 'exact',
+        kind: 'prefix',
         path: routePath,
         handler: async (req, res) => {
           try {
@@ -148,10 +281,14 @@ export function apply(ctx) {
               res.destroy()
               return
             }
-            sendJson(res, 500, { ok: false, error: String(error?.message ?? error) })
+            const message = String(error?.message ?? error)
+            sendJson(res, message.includes('body') || message.includes('JSON') ? 400 : 500, {
+              ok: false,
+              error: message,
+            })
           }
         },
       }),
-    'todo-table: data route',
+    'todo-table: data routes',
   )
 }

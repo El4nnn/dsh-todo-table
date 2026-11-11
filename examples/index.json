@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "tables": [
+    {
+      "id": "example",
+      "name": "示例表",
+      "sessionId": null,
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}

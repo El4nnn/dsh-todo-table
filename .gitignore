@@ -1,5 +1,6 @@
-# 本插件的真实数据文件（含个人待办内容），不入库
-data/todos.json
+# 运行时数据：表清单（data/index.json）与每张表的行（data/tables/*.json）
+# 这里放的是真实待办内容，不入库。示例见 examples/
+data/
 
 # 依赖与构建产物
 node_modules/
